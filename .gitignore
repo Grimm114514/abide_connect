@@ -2,8 +2,11 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-data/raw/
-data/processed/
-outputs/
+# Nilearn downloads and derived subject-level feature caches.
+/data/raw/
+/data/processed/
+# Model checkpoints, experiment tables, and generated figures.
+/outputs/
 *.npz
 *.png
+*.pt

@@ -352,6 +352,96 @@ def _fit_gcn_for_site_fold(
     return test_probabilities, best_epoch, best_validation_loss
 
 
+def train_final_gcn(
+    dataset: ConnectomeDataset,
+    checkpoint_path: Path,
+    device_name: str,
+    batch_size: int,
+    epochs: int,
+    hidden_dim: int,
+    top_k: int,
+    seed: int,
+) -> None:
+    """Fit a full-data GCN and save the weights and feature scaling values."""
+
+    if device_name == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(device_name)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA was requested but is unavailable.")
+
+    validate_dataset(dataset)
+    seed_everything(seed)
+    training_nodes = dataset.node_features.reshape(
+        -1, dataset.node_features.shape[-1]
+    )
+    node_mean = training_nodes.mean(axis=0)
+    node_std = training_nodes.std(axis=0)
+    node_std[node_std < 1e-6] = 1.0
+    covariate_mean = dataset.covariates.mean(axis=0)
+    covariate_std = dataset.covariates.std(axis=0)
+    covariate_std[covariate_std < 1e-6] = 1.0
+    scaled_nodes = (
+        (dataset.node_features - node_mean) / node_std
+    ).astype(np.float32)
+    scaled_covariates = (
+        (dataset.covariates - covariate_mean) / covariate_std
+    ).astype(np.float32)
+
+    loader = _make_loader(
+        scaled_nodes,
+        dataset.positive_adjacency,
+        dataset.negative_adjacency,
+        scaled_covariates,
+        dataset.labels,
+        batch_size=batch_size,
+        shuffle=True,
+        device=device,
+    )
+    class_counts = np.bincount(dataset.labels, minlength=2)
+    class_weights = len(dataset.labels) / np.maximum(2.0 * class_counts, 1.0)
+    loss_function = nn.CrossEntropyLoss(
+        weight=torch.tensor(class_weights, dtype=torch.float32, device=device)
+    )
+    model = ConnectomeGCN(hidden_dim=hidden_dim).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=1e-3, weight_decay=1e-3
+    )
+    for _ in range(max(epochs, 1)):
+        model.train()
+        for batch in loader:
+            node_x, positive, negative, covariates, labels = _move_batch(
+                batch, device
+            )
+            optimizer.zero_grad(set_to_none=True)
+            loss = loss_function(
+                model(node_x, positive, negative, covariates), labels
+            )
+            loss.backward()
+            optimizer.step()
+
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "model_state_dict": model.cpu().state_dict(),
+            "node_mean": torch.from_numpy(node_mean.astype(np.float32)),
+            "node_std": torch.from_numpy(node_std.astype(np.float32)),
+            "covariate_mean": torch.from_numpy(
+                covariate_mean.astype(np.float32)
+            ),
+            "covariate_std": torch.from_numpy(
+                covariate_std.astype(np.float32)
+            ),
+            "hidden_dim": int(hidden_dim),
+            "top_k": int(top_k),
+            "epochs": int(max(epochs, 1)),
+            "seed": int(seed),
+        },
+        checkpoint_path,
+    )
+
+
 def _connectivity_matrix(
     fisher_z_edges: np.ndarray,
 ) -> np.ndarray:

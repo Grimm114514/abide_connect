@@ -1,6 +1,6 @@
 # ABIDE 多站点脑功能连接图分类
 
-本项目从 ABIDE I 的预处理 CC200 脑区时间序列构建静息态功能连接图，比较三类 ASD/典型发育对照组分类器，并用留一站点验证测试跨站点泛化。项目按数据准备、模型、实验评估分模块实现，可用 CUDA 版 PyTorch 在 RTX 5090 上训练轻量 GCN。
+本项目从 ABIDE I 的预处理 CC200 脑区时间序列构建静息态功能连接图，比较三类 ASD/典型发育对照组分类器，并用留一站点验证测试跨站点泛化。下载与特征准备、训练评估、模型预测分别通过独立脚本执行。CUDA 版 PyTorch 可用于训练轻量 GCN。
 
 ## 研究问题
 
@@ -22,11 +22,13 @@
 
 ## 项目结构
 
-    abide_connectome_gcn/
+    abide_connect/
       PLAN.md
       README.md
       requirements.txt
-      run_project.py
+      download_data.py
+      train_model.py
+      use_model.py
       data/
         raw/
         processed/
@@ -37,6 +39,7 @@
           model.py
           experiment.py
       outputs/
+        models/
         results/
         figures/
 
@@ -54,50 +57,48 @@ PLAN.md 包含研究设计、步骤、验收条件、结果清单和报告要求
 
 ## 安装
 
-在项目根目录执行以下命令。
+激活已配置好的 Conda 环境并进入项目根目录。项目依赖列在 requirements.txt 中，CUDA 版 PyTorch 需按当前系统和驱动选择匹配版本。
 
-    py -3.11 -m venv .venv
-    .\.venv\Scripts\Activate.ps1
-    python -m pip install --upgrade pip
-
-先从 PyTorch 官方安装页选择匹配当前驱动的 Windows CUDA 版 PyTorch。RTX 5090 需要支持 Blackwell 架构的近期 PyTorch/CUDA 组合。示例安装命令如下，若官方推荐版本更新，以官方选择器为准。
-
-    python -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+    conda activate abide
     python -m pip install -r requirements.txt
 
-验证 CUDA 识别情况。
+验证 PyTorch 与 CUDA。
 
     python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU mode')"
 
-如果 torch.cuda.is_available() 为 False，脚本可用 CPU 运行。检查 PyTorch 版本、显卡驱动和 CUDA wheel 是否匹配。
+## 分阶段运行
 
-## 运行
+下载、训练和预测是三个独立入口。首次下载需要联网，不会下载原始 MRI。数据准备脚本会保存 Nilearn 下载文件和派生特征缓存。中断后重新运行会复用已下载文件。
 
-第一次运行会通过 Nilearn 下载预处理后的 ROI 时间序列和表型数据。无需下载原始 MRI。首次下载需要联网，下载后会在 data/processed 生成可复用缓存。
+### 1. 下载和准备数据
 
-    python run_project.py --data-dir data --output-dir outputs --device auto
+    python download_data.py --data-dir data --top-k 20
 
-常用参数：
+这一步获取经过质量筛选的 ABIDE PCP CC200 ROI 时序，计算功能连接图、节点特征和 Fisher z 连接特征，并写入 data/processed。若只需重建派生特征缓存，可运行：
 
-    --data-dir       Nilearn 下载缓存根目录，默认 data
-    --output-dir     结果目录，默认 outputs
-    --device         auto、cuda 或 cpu，默认 auto
-    --batch-size     GCN 批量大小，默认 32
-    --max-epochs     每个外层折的最大训练轮数，默认 100
-    --patience       早停轮数，默认 12
-    --top-k          每个脑区保留的连接数，默认 20
-    --seed           随机种子，默认 42
-    --rebuild-cache  强制重建派生缓存，不会清除 Nilearn 下载文件
+    python download_data.py --data-dir data --top-k 20 --rebuild-cache
 
-更改 --top-k 后需同时传入 --rebuild-cache，以便重新构造图邻接矩阵。Nilearn 已下载的原始 ROI 时序会继续复用。
+更改 top-k 时需使用 --rebuild-cache。Nilearn 已下载的原始数据会继续复用。
 
-CPU 后备运行示例：
+### 2. 训练和评估
 
-    python run_project.py --data-dir data --output-dir outputs --device cpu
+训练脚本只读取已经准备好的缓存，不会触发下载。它运行留一站点验证及三类模型比较，然后根据各站点 GCN 的最佳轮数中位数，在完整数据上拟合并保存最终 GCN。
 
-如需仅检查命令行参数，不会触发数据下载：
+    python train_model.py --data-dir data --output-dir outputs --device auto
 
-    python run_project.py --help
+常用参数包括 --device auto/cuda/cpu、--batch-size 32、--max-epochs 100、--patience 12、--hidden-dim 32、--top-k 20 和 --seed 42。若找不到特征缓存，先运行 download_data.py。top-k 必须与生成缓存时一致。
+
+训练结束后，最终模型保存在 outputs/models/signed_gcn.pt，交叉验证表格和图表保存在 outputs/results 和 outputs/figures。
+
+### 3. 使用已训练模型进行预测
+
+预测脚本读取 checkpoint 和一个派生特征 NPZ 缓存，输出 ASD 概率与 0.5 阈值下的预测标签。
+
+    python use_model.py --model outputs/models/signed_gcn.pt --input data/processed/abide_cc200_graphs.npz --output outputs/results/predictions.csv --device auto
+
+输入缓存需包含 node_features、positive_adjacency、negative_adjacency 和 covariates，形状分别为 N×200×5、N×200×200、N×200×200 和 N×3。若包含 subject_ids，预测表会保留受试者 ID。输入缓存和模型的 top-k 设置必须相同。使用同一 ABIDE 缓存训练并预测得到的是训练集预测，跨站点泛化性能应查看训练阶段生成的折外预测结果。
+
+各脚本可用 --help 查看参数，不会在显示帮助时下载数据或训练模型。
 
 ## 数据与质控
 
@@ -108,11 +109,14 @@ ABIDE 标记中 DX_GROUP 为 1 表示 ASD，为 2 表示典型发育对照。项
 ## 输出文件
 
     outputs/
+      models/
+        signed_gcn.pt
       results/
         metrics_by_site.csv
         summary_metrics.csv
         oof_predictions.csv
         gcn_training_by_site.csv
+        predictions.csv
       figures/
         mean_fc_by_group.png
         roc_oof.png
@@ -125,11 +129,13 @@ ABIDE 标记中 DX_GROUP 为 1 表示 ASD，为 2 表示典型发育对照。项
 
 summary_metrics.csv 是总体折外指标。metrics_by_site.csv 按模型和留出站点列出表现。oof_predictions.csv 保存每位受试者在其未参与训练的站点折中的预测概率。gcn_training_by_site.csv 记录各折最佳验证轮数与损失。participants.csv 和 site_group_counts.csv 用于报告最终样本筛选和站点分布。
 
+.gitignore 会忽略 data/raw、data/processed 和 outputs 下生成的下载文件、特征缓存、模型权重、结果表格与图像，不会将这些数据产物提交到 Git。
+
 ## GPU 使用
 
 device 为 auto 且 CUDA 可用时，GCN 模型和每个批次的数据会被移动到 CUDA 设备。终端会打印设备名称。传统逻辑回归由 scikit-learn 在 CPU 上运行。功能连接计算也在 CPU 上完成，因为该数据规模下搬运到 GPU 不一定更快。
 
-RTX 5090 可以训练本项目的 GCN，但约 871 个受试者仍属于小规模图数据。建议先运行一个完整交叉验证，再按需要增加随机种子或敏感性分析。
+RTX 5070 Ti 等具备 CUDA 支持的 NVIDIA GPU 可以训练本项目的 GCN，但约 871 个受试者仍属于小规模图数据。建议先运行一个完整交叉验证，再按需要增加随机种子或敏感性分析。
 
 建议预留 16 GB 系统内存和 5 GB 磁盘空间。预处理 ROI 时序约 0.3–0.5 GB。首次下载预计 5–30 分钟，连接矩阵计算约 2–10 分钟，完整的 20 站点 GCN 评估约预留 10–60 分钟。后两项训练耗时是根据数据规模估计，尚未在 RTX 5090 上实测。环境配置与数据检查约需 3–7 小时人工时间，报告撰写另需约 3–6 小时。
 
