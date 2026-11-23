@@ -10,9 +10,6 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from abide_gcn.data import prepare_abide_cache
-from abide_gcn.experiment import run_experiment
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -52,6 +49,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    # Import project dependencies only after parsing arguments so that
+    # ``python run_project.py --help`` works in a fresh environment.
+    from abide_gcn.data import prepare_abide_cache
+    from abide_gcn.experiment import run_experiment
+
     processed_dir = args.data_dir / "processed"
     cache_path = processed_dir / "abide_cc200_graphs.npz"
     dataset = prepare_abide_cache(

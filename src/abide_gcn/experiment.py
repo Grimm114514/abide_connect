@@ -25,7 +25,7 @@ from sklearn.preprocessing import StandardScaler
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from .data import ConnectomeDataset, N_ROIS
+from .data import ConnectomeDataset, N_ROIS, validate_dataset
 from .model import ConnectomeGCN
 
 
@@ -67,6 +67,30 @@ def _classification_metrics(
         "sensitivity": float(sensitivity),
         "specificity": float(specificity),
     }
+
+
+def _validate_site_groups(dataset: ConnectomeDataset) -> None:
+    """Validate the metadata required by site-held-out evaluation."""
+
+    validate_dataset(dataset)
+
+    sites = np.unique(dataset.sites)
+    if len(sites) < 3:
+        raise ValueError("At least three acquisition sites are needed.")
+    if np.unique(dataset.labels).size != 2:
+        raise ValueError("The prepared dataset must contain both diagnosis groups.")
+
+    invalid_sites: list[str] = []
+    for site in sites:
+        site_labels = dataset.labels[dataset.sites == site]
+        if np.unique(site_labels).size != 2:
+            invalid_sites.append(str(site))
+    if invalid_sites:
+        joined_sites = ", ".join(invalid_sites)
+        raise ValueError(
+            "Each held-out site must contain both diagnosis groups. "
+            f"Invalid site(s): {joined_sites}."
+        )
 
 
 def _fit_logistic_model(
@@ -176,6 +200,15 @@ def _fit_gcn_for_site_fold(
     )
     training_indices = outer_train[relative_train]
     validation_indices = outer_train[relative_validation]
+
+    if np.unique(dataset.labels[training_indices]).size != 2:
+        raise ValueError(
+            "The inner site-grouped training split contains only one diagnosis class."
+        )
+    if np.unique(dataset.labels[validation_indices]).size != 2:
+        raise ValueError(
+            "The inner site-grouped validation split contains only one diagnosis class."
+        )
 
     node_values = dataset.node_features
     training_nodes = node_values[training_indices].reshape(
@@ -446,10 +479,7 @@ def run_experiment(
     else:
         print("Training the GCN on CPU")
 
-    if len(np.unique(dataset.sites)) < 3:
-        raise ValueError("At least three acquisition sites are needed.")
-    if np.unique(dataset.labels).size != 2:
-        raise ValueError("The prepared dataset must contain both diagnosis groups.")
+    _validate_site_groups(dataset)
 
     seed_everything(seed)
     output_dir.mkdir(parents=True, exist_ok=True)

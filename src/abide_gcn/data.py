@@ -28,6 +28,72 @@ class ConnectomeDataset:
     fc_edges: np.ndarray
 
 
+def validate_dataset(dataset: ConnectomeDataset) -> None:
+    """Validate cached array shapes, identifiers, labels, and numeric values."""
+
+    sample_count = len(dataset.labels)
+    if sample_count == 0:
+        raise ValueError("The prepared dataset is empty.")
+
+    one_dimensional_arrays = {
+        "subject_ids": dataset.subject_ids,
+        "file_ids": dataset.file_ids,
+        "sites": dataset.sites,
+        "labels": dataset.labels,
+    }
+    for name, values in one_dimensional_arrays.items():
+        if values.ndim != 1 or len(values) != sample_count:
+            raise ValueError(
+                f"{name} must be one-dimensional with {sample_count} rows, "
+                f"got shape {values.shape}."
+            )
+
+    if len(np.unique(dataset.subject_ids)) != sample_count:
+        raise ValueError("The prepared dataset contains duplicate subject IDs.")
+    if (
+        np.any(dataset.subject_ids == "")
+        or np.any(dataset.file_ids == "")
+        or np.any(dataset.file_ids == "no_filename")
+        or np.any(dataset.sites == "")
+    ):
+        raise ValueError("Subject IDs, file IDs, and site IDs must be valid.")
+
+    label_values = np.unique(dataset.labels)
+    if not np.all(np.isin(label_values, [0, 1])):
+        raise ValueError(f"Labels must be binary 0/1, got {label_values.tolist()}.")
+    if label_values.size != 2:
+        raise ValueError("The prepared dataset must contain both diagnosis groups.")
+
+    expected_edge_count = N_ROIS * (N_ROIS - 1) // 2
+    expected_shapes = {
+        "covariates": (sample_count, 3),
+        "node_features": (sample_count, N_ROIS, 5),
+        "positive_adjacency": (sample_count, N_ROIS, N_ROIS),
+        "negative_adjacency": (sample_count, N_ROIS, N_ROIS),
+        "fc_edges": (sample_count, expected_edge_count),
+    }
+    arrays = {
+        "covariates": dataset.covariates,
+        "node_features": dataset.node_features,
+        "positive_adjacency": dataset.positive_adjacency,
+        "negative_adjacency": dataset.negative_adjacency,
+        "fc_edges": dataset.fc_edges,
+    }
+    for name, expected_shape in expected_shapes.items():
+        values = arrays[name]
+        if values.shape != expected_shape:
+            raise ValueError(
+                f"{name} must have shape {expected_shape}, got {values.shape}."
+            )
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} contains NaN or infinite values.")
+
+    if np.any(dataset.positive_adjacency < 0) or np.any(
+        dataset.negative_adjacency < 0
+    ):
+        raise ValueError("Positive and negative adjacency values must be nonnegative.")
+
+
 def _number(value: object) -> float:
     """Convert a phenotype cell to a finite float, returning NaN if invalid."""
 
@@ -128,7 +194,7 @@ def load_cache(cache_path: Path, expected_top_k: int) -> ConnectomeDataset:
                 f"The cache uses top_k={cached_top_k}, but top_k={expected_top_k} "
                 "was requested. Rebuild it with --rebuild-cache."
             )
-        return ConnectomeDataset(
+        dataset = ConnectomeDataset(
             subject_ids=cache["subject_ids"],
             file_ids=cache["file_ids"],
             sites=cache["sites"],
@@ -139,6 +205,8 @@ def load_cache(cache_path: Path, expected_top_k: int) -> ConnectomeDataset:
             negative_adjacency=cache["negative_adjacency"],
             fc_edges=cache["fc_edges"],
         )
+    validate_dataset(dataset)
+    return dataset
 
 
 def _save_participant_table(
@@ -284,6 +352,7 @@ def prepare_abide_cache(
         negative_adjacency=np.stack(negative_adjacencies).astype(np.float32),
         fc_edges=np.stack(fc_edges).astype(np.float32),
     )
+    validate_dataset(dataset)
 
     np.savez_compressed(
         cache_path,
