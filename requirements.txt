@@ -4,3 +4,4 @@ scikit-learn>=1.4
 matplotlib>=3.8
 nilearn>=0.10.4
 torch>=2.7
+tqdm>=4.65

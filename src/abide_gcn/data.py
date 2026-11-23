@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from nilearn.datasets import fetch_abide_pcp
 
+from .download_progress import AbideDownloadProgress
+
 
 N_ROIS = 200
 
@@ -258,16 +260,30 @@ def prepare_abide_cache(
 
     data_dir.mkdir(parents=True, exist_ok=True)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    print("Fetching ABIDE PCP CC200 ROI time series. The first run needs internet.")
-    fetched = fetch_abide_pcp(
-        data_dir=str(data_dir),
-        pipeline="cpac",
-        band_pass_filtering=True,
-        global_signal_regression=False,
-        derivatives=["rois_cc200"],
-        quality_checked=True,
-        verbose=1,
+    print(
+        "Fetching ABIDE PCP CC200 ROI time series. "
+        "The first run needs internet."
     )
+    with AbideDownloadProgress() as progress:
+        phenotype_data = fetch_abide_pcp(
+            data_dir=str(data_dir),
+            pipeline="cpac",
+            band_pass_filtering=True,
+            global_signal_regression=False,
+            derivatives=[],
+            quality_checked=True,
+            verbose=0,
+        )
+        progress.set_expected_subjects(len(phenotype_data.phenotypic))
+        fetched = fetch_abide_pcp(
+            data_dir=str(data_dir),
+            pipeline="cpac",
+            band_pass_filtering=True,
+            global_signal_regression=False,
+            derivatives=["rois_cc200"],
+            quality_checked=True,
+            verbose=0,
+        )
 
     phenotypes = pd.DataFrame(fetched.phenotypic).reset_index(drop=True)
     time_series_list = fetched.rois_cc200

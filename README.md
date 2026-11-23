@@ -74,7 +74,9 @@ PLAN.md 包含研究设计、步骤、验收条件、结果清单和报告要求
 
     python download_data.py --data-dir data --top-k 20
 
-这一步获取经过质量筛选的 ABIDE PCP CC200 ROI 时序，计算功能连接图、节点特征和 Fisher z 连接特征，并写入 data/processed。若只需重建派生特征缓存，可运行：
+这一步获取经过质量筛选的 ABIDE PCP CC200 ROI 时序，计算功能连接图、节点特征和 Fisher z 连接特征，并写入 data/processed。下载时终端显示已完成的 ROI 时序文件数、累计传输量和实时网速。已缓存文件会快速计入完成进度，不会重复下载。
+
+若只需重建派生特征缓存，可运行：
 
     python download_data.py --data-dir data --top-k 20 --rebuild-cache
 
