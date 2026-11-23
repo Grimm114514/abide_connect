@@ -10,3 +10,4 @@ __pycache__/
 *.npz
 *.png
 *.pt
+!results/figures/*.png
